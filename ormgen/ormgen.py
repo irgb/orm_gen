@@ -14,15 +14,7 @@ engine_sql = """SELECT TABLE_NAME, ENGINE FROM information_schema.TABLES WHERE T
 
 index_sql = """SELECT DISTINCT TABLE_NAME, INDEX_NAME, COLUMN_NAME, SEQ_IN_INDEX FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = '{schema}' ORDER BY TABLE_NAME, INDEX_NAME, SEQ_IN_INDEX"""
 
-host = 'localhost'
-user = 'username'
-passwd = 'password'
-schema = 'database'
-
-db = MySQLdb.connect(host, user, passwd, schema, charset="utf8", use_unicode=True)
-cursor = db.cursor()
-
-def get_table_columns():
+def get_table_columns(cursor, schema):
     table_columns = {}
     cursor.execute(columns_sql.format(schema=schema))
     for item in cursor.fetchall():
@@ -32,14 +24,14 @@ def get_table_columns():
         table_columns[table].append(item[1:])
     return table_columns
 
-def get_table_engine():
+def get_table_engine(cursor, schema):
     table_engine = {}
     cursor.execute(engine_sql.format(schema=schema))
     for table, engine in cursor.fetchall():
         table_engine[table] = engine
     return table_engine
 
-def get_table_index():
+def get_table_index(cursor, schema):
     table_index = {}
     cursor.execute(index_sql.format(schema=schema))
     for table, index_name, column_name, _ in cursor.fetchall():
@@ -202,34 +194,39 @@ class Model:
             res = res + '    ' + str(column) + '\n'
         return res
 
-def main():
-    table_columns = get_table_columns()
-    table_engine = get_table_engine()
-    table_index = get_table_index()
-    models = {}
-    for table in table_columns.keys():
-        columns = table_columns[table]
-        model = Model(table, table_engine[table])
-        models[table] = model
-        for column_name, column_type, column_default, column_key, is_nullable, charset, collation, comment, extra in columns:
-            column = Column(column_name, column_type, column_default, column_key, is_nullable, charset, collation, comment, extra)
-            model.add_column(column)
+class OrmGenerator:
+    def __init__(self, host, user, password, schema):
+        self.db = MySQLdb.connect(host, user, password, schema, charset="utf8", use_unicode=True)
+        self.cursor = self.db.cursor()
+        self.schema = schema
 
-        if table in table_index:
-            model.parse_index(table_index[table])
+    def render(self, outfile):
+        table_columns = get_table_columns(self.cursor, self.schema)
+        table_engine = get_table_engine(self.cursor, self.schema)
+        table_index = get_table_index(self.cursor, self.schema)
+        models = {}
+        for table in table_columns.keys():
+            columns = table_columns[table]
+            model = Model(table, table_engine[table])
+            models[table] = model
+            for column_name, column_type, column_default, column_key, is_nullable, charset, collation, comment, extra in columns:
+                column = Column(column_name, column_type, column_default, column_key, is_nullable, charset, collation, comment, extra)
+                model.add_column(column)
 
-    print('# coding: utf-8\n')
-    print('from sqlalchemy import BigInteger, Integer, SmallInteger, Column, Date, Time, DateTime, Index, Numeric, Float, String, Text, text')
-    print('from sqlalchemy.dialects.mysql.types import YEAR')
-    print('from sqlalchemy.ext.declarative import declarative_base')
-    print('\n')
-    print('Base = declarative_base()')
-    print('metadata = Base.metadata')
-    print('\n')
+            if table in table_index:
+                model.parse_index(table_index[table])
 
-    tables = sorted(models.keys())
-    for table in tables:
-        print(str(models[table]))
-            
-if __name__ == '__main__':
-    sys.exit(main())
+        result = ''
+        result += '# coding: utf-8\n\n'
+        result += 'from sqlalchemy import BigInteger, Integer, SmallInteger, Column, Date, Time, DateTime, Index, Numeric, Float, String, Text, text\n'
+        result += 'from sqlalchemy.dialects.mysql.types import YEAR\n'
+        result += 'from sqlalchemy.ext.declarative import declarative_base\n'
+        result += '\n\n'
+        result += 'Base = declarative_base()\n'
+        result += 'metadata = Base.metadata\n'
+        result += '\n\n'
+
+        tables = sorted(models.keys())
+        for table in tables:
+            result += str(models[table]) + '\n'
+        print(result, file=outfile)
